@@ -1,0 +1,57 @@
+name: Build, publish and deploy to all environments
+
+env:
+  harbor_namespace: <INSERT YOUR HARBOR NAMESPACE>
+
+on:
+  # Trigger the workflow on push or pull request,
+  # but only for the main branch
+  push:
+   branches:
+    - main
+
+jobs:
+  Build_and_Push_Image_Dev:
+    # The workflow will run on a runner that has the below label
+    runs-on: self-hosted
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Checkout the repository to the GitHub Actions runner
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up Maven
+        uses: stCarolas/setup-maven@v4.2
+        with:
+          maven-version: 3.8.6
+
+      # The setup-java step configures the Java 11 JDK by Adoptium.
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'corretto'
+          cache: maven
+
+      # The following steps will run all tests, create the JAR, and finally build the docker image and push it to
+      # environment specific harbor repositories
+      - name: Build and push Docker image to Harbor for DEV
+        run: |
+          mvn -B package --file pom.xml
+          docker login --username ${{ secrets.HARBOR_USER }} --password ${{ secrets.HARBOR_PASSWORD }} harbor.eu-dev.internal-az.bakery.volvocars.biz
+          docker build -t harbor.eu-dev.internal-az.bakery.volvocars.biz/${{ env.harbor_namespace}}:${{ github.sha }} .
+          docker push harbor.eu-dev.internal-az.bakery.volvocars.biz/${{ env.harbor_namespace}}:${{ github.sha }}
+
+      # Replace old imageVersion with the newly built
+      - name: Update deploy version
+        run: |
+          sed -i "s/\(\(imageVersion:.\).*\)/\2${{ github.sha }}/" helm/values.yaml
+
+      - name: Commit new deploy version
+        run: |
+          git config --local user.name ${{ github.actor }}
+          git config --local user.email ${{ github.actor }}@volvocars.com
+          git commit -am "Update image tags for development to ${{ github.sha }}"
+          git push
